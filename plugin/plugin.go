@@ -6,11 +6,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/flatheadmill/tang-encryption-provider/crypter"
 	"github.com/lainio/err2"
 	"github.com/lainio/err2/try"
 	"google.golang.org/grpc"
 
+	"github.com/flatheadmill/tang-encryption-provider/crypter"
 	"github.com/flatheadmill/tang-encryption-provider/handler"
 )
 
@@ -23,7 +23,6 @@ const (
 
 type Crypter interface {
 	Encrypt(plain []byte) (cipher []byte, err error)
-	Decrypt(cipher []byte) (plain []byte, err error)
 }
 
 type Plugin struct {

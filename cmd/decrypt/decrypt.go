@@ -12,13 +12,13 @@ import (
 	"github.com/lainio/err2/try"
 	"google.golang.org/grpc"
 
-	pb "k8s.io/apiserver/pkg/storage/value/encrypt/envelope/v1beta1"
+	pbv1 "k8s.io/apiserver/0.23.5/pkg/storage/value/encrypt/envelope/v1beta1"
 
 	"github.com/flatheadmill/tang-encryption-provider/crypter"
 )
 
 func decryptWithKMS(socket string) (err error) {
-	defer err2.Return(&err)
+	defer err2.Handle(&err)
 
 	input := try.To1(ioutil.ReadAll(os.Stdin))
 
@@ -30,15 +30,15 @@ func decryptWithKMS(socket string) (err error) {
 	conn := try.To1(grpc.Dial(socket, grpc.WithContextDialer(dialer), grpc.WithInsecure()))
 	defer conn.Close()
 
-	client := pb.NewKeyManagementServiceClient(conn)
+	client := pbv1.NewKeyManagementServiceClient(conn)
 
 	ctx := context.Background()
 
-	version := try.To1(client.Version(ctx, &pb.VersionRequest{}))
+	version := try.To1(client.Version(ctx, &pbv1.VersionRequest{}))
 
 	fmt.Fprintf(os.Stderr, "%v\n", version)
 
-	plain := try.To1(client.Decrypt(ctx, &pb.DecryptRequest{Cipher: input}))
+	plain := try.To1(client.Decrypt(ctx, &pbv1.DecryptRequest{Cipher: input}))
 
 	fmt.Print(string(plain.Plain))
 
@@ -46,7 +46,7 @@ func decryptWithKMS(socket string) (err error) {
 }
 
 func decryptWithTang() (err error) {
-	defer err2.Return(&err)
+	defer err2.Handle(&err)
 	input := try.To1(ioutil.ReadAll(os.Stdin))
 	plain := try.To1(crypter.Decrypt(input))
 	fmt.Print(string(plain))

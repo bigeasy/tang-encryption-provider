@@ -88,14 +88,14 @@ func NewCrypter(url string, thumbprint string) (crypter *Crypter, err error) {
 	try.To1(jws.Verify(advJSON, jwa.ES512, verifyKey))
 
 	exchangeKey := try.To1(findKey(keySet, jwk.KeyOpDeriveKey))
-	err2.Check(exchangeKey.Set(jwk.KeyOpsKey, jwk.KeyOperationList{}))
-	err2.Check(exchangeKey.Set(jwk.AlgorithmKey, ""))
+	try.To(exchangeKey.Set(jwk.KeyOpsKey, jwk.KeyOperationList{}))
+	try.To(exchangeKey.Set(jwk.AlgorithmKey, ""))
 
 	headers := jwe.NewHeaders()
 
-	err2.Check(headers.Set(jwe.KeyIDKey, encode64(try.To1(exchangeKey.Thumbprint(crypto.SHA256)))))
-	err2.Check(headers.Set(jwe.ContentEncryptionKey, jwa.A256GCM))
-	err2.Check(headers.Set(jwe.AlgorithmKey, jwa.ECDH_ES))
+	try.To(headers.Set(jwe.KeyIDKey, encode64(try.To1(exchangeKey.Thumbprint(crypto.SHA256)))))
+	try.To(headers.Set(jwe.ContentEncryptionKey, jwa.A256GCM))
+	try.To(headers.Set(jwe.AlgorithmKey, jwa.ECDH_ES))
 
 	clevis := try.To1(json.Marshal(&jsonClevis{
 		Plugin: "tang",
@@ -104,7 +104,7 @@ func NewCrypter(url string, thumbprint string) (crypter *Crypter, err error) {
 			Advertisement: message.Payload(),
 		},
 	}))
-	err2.Check(headers.Set("clevis", json.RawMessage(clevis)))
+	try.To(headers.Set("clevis", json.RawMessage(clevis)))
 
 	return &Crypter{
 		keyID:       thumbprint,
@@ -118,14 +118,9 @@ func (c *Crypter) Encrypt(plain []byte) (cipher []byte, err error) {
 	return try.To1(jwe.Encrypt(plain, jwa.ECDH_ES, c.exchangeKey, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(c.headers))), nil
 }
 
-func (c *Crypter) Decrypt(cipher []byte) (plain []byte, err error) {
-	return Decrypt(cipher)
-}
-
 func Decrypt(cipher []byte) (plain []byte, err error) {
-	plain, err = clevis.Decrypt(cipher)
-	err = errors.Wrap(err, "failed to decrypt cipher")
-	return
+	defer err2.Handle(&err, handler.Handler(&err))
+	return try.To1(clevis.Decrypt(cipher)), nil
 }
 
 func (c Crypter) Health() error {
@@ -135,7 +130,7 @@ func (c Crypter) Health() error {
 		return errors.Wrap(err, "failed to encrypt random text")
 	}
 
-	decryptedText, err := c.Decrypt(cipher)
+	decryptedText, err := Decrypt(cipher)
 	if err != nil {
 		return errors.Wrap(err, "failed to decrypt random cipher text")
 	}
