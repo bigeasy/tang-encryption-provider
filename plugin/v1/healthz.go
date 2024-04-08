@@ -49,9 +49,9 @@ func (h *HealthChecker) PingRPC(ctx context.Context, conn *grpc.ClientConn) erro
 }
 
 func (h *HealthChecker) PingKMS(ctx context.Context, conn *grpc.ClientConn) error {
-	client := NewKeyManagementServiceClient(conn)
+	client := pb.NewKeyManagementServiceClient(conn)
 
-	encryptResponse, err := client.Encrypt(ctx, &EncryptRequest{
+	encryptResponse, err := client.Encrypt(ctx, &pb.EncryptRequest{
 		Version: apiVersion,
 		Plain:   []byte("secret"),
 	})
@@ -59,7 +59,7 @@ func (h *HealthChecker) PingKMS(ctx context.Context, conn *grpc.ClientConn) erro
 		return fmt.Errorf("failed to ping KMS: %w", err)
 	}
 
-	if _, err = client.Decrypt(ctx, &DecryptRequest{
+	if _, err = client.Decrypt(ctx, &pb.DecryptRequest{
 		Version: apiVersion,
 		Cipher:  []byte(encryptResponse.Cipher),
 	}); err != nil {

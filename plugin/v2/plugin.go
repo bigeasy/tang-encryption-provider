@@ -58,5 +58,6 @@ func (g *v2plugin) Decrypt(ctx context.Context, request *pb.DecryptRequest) (res
 }
 
 func (g *v2plugin) Register(s *grpc.Server) {
+	g.logger.Info("reigstering")
 	pb.RegisterKeyManagementServiceServer(s, g)
 }

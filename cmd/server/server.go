@@ -21,7 +21,7 @@ type Specification struct {
 	ThumbprintCACert string `envconfig:"thumbprint_ca_cert"`
 	MetricsPort   	 string `envconfig:"metrics_port" default:8082`
 	MetricsPath   	 string `envconfig:"metrics_path" default:"/metrics"`
-	Version          string `default:v2`
+	Version          string `default:"v2"`
 	UnixSocket       string `envconfig:"unix_socket" default:"/var/run/kmsplugin/socket.sock"`
 	HealthzPort      string `envconfig:"healthz_port" default:"8081"`
 	HealthzTimeout	 int64  `envconfig:"healthz_grpc_call_timeout" default:"5000"`
@@ -31,7 +31,7 @@ func main() {
 	var spec Specification
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	abend := func (message string, err error) {
-		slog.Error(message, slog.Any("err", err))
+		logger.Error(message, slog.Any("err", err))
 		os.Exit(1)
 	}
 	err := envconfig.Process("tang_kms", &spec)
@@ -41,6 +41,7 @@ func main() {
 	logger.Info("configuration",
 		slog.String("thumbprints", spec.Thumbprints),
 		slog.String("unix_socket", spec.UnixSocket),
+		slog.String("version", spec.Version),
 	)
 	metrics := &plugin.Metrics{
 		ServingURL: &url.URL{
