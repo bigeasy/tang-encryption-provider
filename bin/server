@@ -1,0 +1,11 @@
+#!/bin/sh
+
+export TANG_KMS_TANG_SERVER=http://127.0.0.1:8800
+export TANG_KMS_THUMBPRINTS=2P5B1BrEu6ltBlfu8EWHUVxAJX6FRLCmTQUPsAHySa8
+export TANG_KMS_UNIX_SOCKET=$(pwd)/socket
+
+if [ "$1" = v1 ]; then
+    export TANG_KMS_VERSION=v1
+fi
+
+exec out/server

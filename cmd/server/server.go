@@ -1,128 +1,80 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"github.com/flatheadmill/tang-encryption-provider/api"
-	"github.com/flatheadmill/tang-encryption-provider/crypter"
-	"github.com/gorilla/mux"
-	"github.com/pkg/errors"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
+	"net/url"
 	"time"
+	"github.com/flatheadmill/tang-encryption-provider/crypter"
+	"os"
+	"log/slog"
 
-	"github.com/flatheadmill/tang-encryption-provider/logger"
 	"github.com/flatheadmill/tang-encryption-provider/plugin"
+	v1 "github.com/flatheadmill/tang-encryption-provider/plugin/v1"
+	v2 "github.com/flatheadmill/tang-encryption-provider/plugin/v2"
 	"github.com/kelseyhightower/envconfig"
-	"github.com/lainio/err2/try"
 )
 
 type Specification struct {
-	ServerUrl  string `envconfig:"server_url"`
-	Thumbprint string
-	UnixSocket string `envconfig:"unix_socket" default:"/var/run/kmsplugin/socket.sock"`
-	HttpPort   string `envconfig:"http_port" default:"8081"`
-	Env        string `default:"local"`
+	TangURL          string `envconfig:"tang_url"`
+	Thumbprints      string `envconfig:"thumbprints"`
+	ThumbprintUrl    string `envconfig:"thumbprint_url"`
+	ThumbprintCACert string `envconfig:"thumbprint_ca_cert"`
+	MetricsPort   	 string `envconfig:"metrics_port" default:8082`
+	MetricsPath   	 string `envconfig:"metrics_path" default:"/metrics"`
+	Version          string `default:v2`
+	UnixSocket       string `envconfig:"unix_socket" default:"/var/run/kmsplugin/socket.sock"`
+	HealthzPort      string `envconfig:"healthz_port" default:"8081"`
+	HealthzTimeout	 int64  `envconfig:"healthz_grpc_call_timeout" default:"5000"`
 }
-
-const (
-	EnvLocal = "local"
-	EnvDev   = "dev"
-	EnvProd  = "prod"
-)
 
 func main() {
 	var spec Specification
-	try.To(envconfig.Process("tang_kms", &spec))
-	log := logger.New(os.Stdout)
-	if spec.Env == EnvLocal {
-		log.Console()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	abend := func (message string, err error) {
+		slog.Error(message, slog.Any("err", err))
+		os.Exit(1)
 	}
-
-	log.MsgWithFields(map[string]interface{}{"thumbprint": spec.Thumbprint, "unix_socket": spec.UnixSocket}, "")
-	crypt := try.To1(crypter.NewCrypter(spec.ServerUrl, spec.Thumbprint))
-
-	httpSvr := setupHttpServer(log, []HealthComponent{NewHealthComponent(crypt, "tang_crypter")}, spec.HttpPort)
-
-	err := run(log, try.To1(plugin.New(log, crypt, spec.UnixSocket)), httpSvr)
+	err := envconfig.Process("tang_kms", &spec)
 	if err != nil {
-		fmt.Printf("exited with error: %T %v\n", err, err)
+		abend("unable to read environment", err)
 	}
-}
-
-func run(l logger.Logger, plug *plugin.Plugin, api *http.Server) error {
-	signalsCh := make(chan os.Signal, 1)
-	signal.Notify(signalsCh, syscall.SIGINT, syscall.SIGTERM)
-
-	rpc, rpcErrorChannel := plug.ServeKMSRequests()
-	if rpc != nil {
-		defer rpc.GracefulStop()
+	logger.Info("configuration",
+		slog.String("thumbprints", spec.Thumbprints),
+		slog.String("unix_socket", spec.UnixSocket),
+	)
+	metrics := &plugin.Metrics{
+		ServingURL: &url.URL{
+			Host: fmt.Sprintf("localhost:%d", spec.MetricsPort),
+			Path: spec.MetricsPath,
+		},
 	}
-
-	httpErrCh := startHttpServer(api)
-	defer stopHttpServer(api)
-
-	var err error
-	select {
-	case sig := <-signalsCh:
-		l.Msgf("captured %v, shutting down kms-plugin", sig)
-	case err = <-rpcErrorChannel:
-	case err = <-httpErrCh:
-	}
-
-	return err
-}
-
-func setupHttpServer(l logger.Logger, components []HealthComponent, httpPort string) *http.Server {
-	compHealths := []api.ComponentHealth{}
-	for _, comp := range components {
-		compHealths = append(compHealths, api.ComponentHealth(comp))
-	}
-	healthAPI := api.NewHealthAPI(l, compHealths...)
-
-	r := mux.NewRouter()
-	r.HandleFunc("/livez", healthAPI.Health)
-	r.HandleFunc("/readyz", healthAPI.Health)
-
-	return &http.Server{Addr: ":" + httpPort, Handler: r}
-}
-
-func startHttpServer(httpSvr *http.Server) chan error {
-	httpErrCh := make(chan error, 1)
-	go func() {
-		if err := httpSvr.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			httpErrCh <- errors.Wrap(err, "http.ListenAndServe erred unexpectedly")
+	var g plugin.Plugin
+	var healthz plugin.HealthChecker
+	switch spec.Version {
+	case "v1":
+		thumbprinter := crypter.NewStaticThumbprinter(spec.Thumbprints)
+		advertiser := crypter.NewTangAdvertiser(spec.TangURL)
+		crypter := crypter.NewCrypter(thumbprinter, advertiser)
+		healthz = v1.NewHealthChecker(logger)
+		g, err = v1.New(logger, crypter)
+		if err != nil {
+			abend("unable to initialize encryption", err)
 		}
-	}()
-	return httpErrCh
-}
-
-func stopHttpServer(httpSvr *http.Server) {
-	// handle http server stop
-	httpCtx, httpCancel := context.WithTimeout(context.Background(), time.Second*3)
-	printErr(errors.Wrap(httpSvr.Shutdown(httpCtx), "failed to shutdown http server"))
-	httpCancel()
-}
-
-func NewHealthComponent(component api.Healther, name string) HealthComponent {
-	return HealthComponent{Healther: component, name: name}
-}
-
-type HealthComponent struct {
-	api.Healther
-	name string
-}
-
-func (h HealthComponent) Name() string {
-	return h.name
-}
-
-func printErr(err error) bool {
-	if err == nil {
-		return false
+	case "v2":
+		thumbprinter := crypter.NewStaticThumbprinter(spec.Thumbprints)
+		advertiser := crypter.NewTangAdvertiser(spec.TangURL)
+		crypter := crypter.NewCrypter(thumbprinter, advertiser)
+		healthz = v2.NewHealthChecker(logger)
+		g = v2.New(logger, crypter)
 	}
-	fmt.Printf("%+v\n", err)
-	return true
+	gm := plugin.NewManager(g, spec.UnixSocket)
+	callTimeout := time.Duration(spec.HealthzTimeout) * time.Millisecond
+	hm := plugin.NewHealthChecker(healthz, spec.UnixSocket, callTimeout, &url.URL{
+		Host: fmt.Sprintf("localhost:%d", spec.MetricsPort),
+		Path: spec.MetricsPath,
+	})
+	err = plugin.Run(logger, gm, hm, metrics)
+	if err != nil {
+		abend("abend", err)
+	}
 }

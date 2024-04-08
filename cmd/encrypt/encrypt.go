@@ -9,37 +9,46 @@ import (
 	"net"
 	"os"
 
-	"github.com/lainio/err2"
-	"github.com/lainio/err2/try"
 	"google.golang.org/grpc"
 
-	pbv1 "k8s.io/apiserver/0.23.5/pkg/storage/value/encrypt/envelope/v1beta1"
+	pbv1 "k8s.io/kms/apis/v1beta1"
 
 	"github.com/flatheadmill/tang-encryption-provider/crypter"
 )
 
-func encryptWithKMS(socket string) (err error) {
-	defer err2.Handle(&err)
-
-	input := try.To1(io.ReadAll(os.Stdin))
+func encryptWithKMS(socket string) (error) {
+	input, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return err
+	}
 
 	dialer := func(ctx context.Context, addr string) (net.Conn, error) {
 		var d net.Dialer
 		return d.DialContext(ctx, "unix", addr)
 	}
 
-	conn := try.To1(grpc.Dial(socket, grpc.WithContextDialer(dialer), grpc.WithInsecure()))
+	conn, err := grpc.Dial(socket, grpc.WithContextDialer(dialer), grpc.WithInsecure())
+	if err != nil {
+		return err
+	}
+
 	defer conn.Close()
 
 	client := pbv1.NewKeyManagementServiceClient(conn)
 
 	ctx := context.Background()
 
-	version := try.To1(client.Version(ctx, &pbv1.VersionRequest{}))
+	version, err := client.Version(ctx, &pbv1.VersionRequest{})
+	if err != nil {
+		return err
+	}
 
 	fmt.Fprintf(os.Stderr, "%v\n", version)
 
-	cipher := try.To1(client.Encrypt(ctx, &pbv1.EncryptRequest{Plain: input}))
+	cipher, err := client.Encrypt(ctx, &pbv1.EncryptRequest{Plain: input})
+	if err != nil {
+		return err
+	}
 
 	fmt.Printf("%s\n", cipher.Cipher)
 
@@ -47,10 +56,21 @@ func encryptWithKMS(socket string) (err error) {
 }
 
 func encryptWithTang(url string, thumbprint string) (err error) {
-	defer err2.Handle(&err)
-	input := try.To1(ioutil.ReadAll(os.Stdin))
-	encrypter := try.To1(crypter.NewCrypter(url, thumbprint))
-	compact := try.To1(encrypter.Encrypt(input))
+	input, err := ioutil.ReadAll(os.Stdin)
+	if err != err {
+		return err
+	}
+	thumbprinter := crypter.NewStaticThumbprinter(thumbprint)
+	advertiser := crypter.NewTangAdvertiser(url)
+	encrypter := crypter.NewCrypter(thumbprinter, advertiser)
+	exchange, err := encrypter.GetExchangeKey()
+	if err != nil {
+		return err
+	}
+	compact, err := encrypter.Encrypt(exchange, input)
+	if err != nil {
+		return err
+	}
 	fmt.Printf("%s\n", compact)
 	return nil
 }

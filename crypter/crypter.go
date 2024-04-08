@@ -3,15 +3,12 @@ package crypter
 import (
 	"context"
 	"crypto"
+	"errors"
 	cryptoRand "crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"slices"
-	"github.com/pkg/errors"
-	"math/rand"
 	"strings"
-	"time"
-	"os"
 
 	"encoding/base64"
 	"encoding/json"
@@ -19,24 +16,16 @@ import (
 	"net/http"
 
 	"github.com/goware/urlx"
-	"github.com/lainio/err2"
-	"github.com/lainio/err2/try"
 
 	"github.com/anatol/clevis.go"
 	"github.com/lestrrat-go/jwx/jwa"
 	"github.com/lestrrat-go/jwx/jwe"
 	"github.com/lestrrat-go/jwx/jwk"
 	"github.com/lestrrat-go/jwx/jws"
-
-	"github.com/flatheadmill/tang-encryption-provider/handler"
 )
 
 func encode64(buffer []byte) string {
 	return base64.RawURLEncoding.EncodeToString(buffer)
-}
-
-func decode64(encoded string) ([]byte, error) {
-	return base64.RawURLEncoding.DecodeString(encoded)
 }
 
 type jsonTang struct {
@@ -50,13 +39,14 @@ type jsonClevis struct {
 }
 
 type Exchange struct {
-	keyID       string
+	KeyID       string
 	headers     jwe.Headers
 	exchangeKey jwk.Key
 }
 
 type Crypter struct {
-	exchange	*Exchange
+	thumbprinter Thumbprinter
+	advertiser Advertiser
 }
 
 type Thumbprinter interface {
@@ -64,46 +54,29 @@ type Thumbprinter interface {
 	Thumbprints() ([]string)
 }
 
-type StaticThumbprinter struct {
+type staticThumbprinter struct {
 	thumbprints []string
 }
 
-func NewStaticThumbprinter (thumbprints string) (thumbprinter StaticThumbprinter) {
+func NewStaticThumbprinter (thumbprints string) staticThumbprinter {
 	split := strings.Split(thumbprints, ",")
 	for i, _ := range split {
 		split[i] = strings.TrimSpace(split[i])
 	}
-	return StaticThumbprinter{thumbprints: split}
+	return staticThumbprinter{thumbprints: split}
 }
 
-func (r StaticThumbprinter) Refresh() (err error) {
+func (r staticThumbprinter) Refresh() error {
 	return nil
 }
 
-func (r StaticThumbprinter) Thumbprints() (thumbprints []string) {
+func (r staticThumbprinter) Thumbprints() (thumbprints []string) {
 	return r.thumbprints
 }
 
 type Advertiser interface {
 	Resolve() ([]byte, error)
 	URL() (string)
-}
-
-type StaticAdvertiser struct {
-	advertisement string
-	url string
-}
-
-func NewStaticAdvertiser (url string, advertisement string) (advertiser StaticAdvertiser) {
-	return StaticAdvertiser{url: url, advertisement: advertisement}
-}
-
-func (r StaticAdvertiser) Resolve() (advertisement []byte, err error) {
-	return []byte(r.advertisement), nil
-}
-
-func (r StaticAdvertiser) URL() (string) {
-	return r.url
 }
 
 type TangAdvertiser struct {
@@ -114,12 +87,41 @@ func NewTangAdvertiser (url string) (advertiser TangAdvertiser) {
 	return TangAdvertiser{url: url}
 }
 
-func (r TangAdvertiser) Resolve() (advertisement []byte, err error) {
-	err2.Handle(&err)
-	url := try.To1(urlx.Normalize(try.To1(urlx.Parse(strings.TrimSuffix(r.url, "/")))))
-	advGet := try.To1(http.Get(fmt.Sprintf("%s/adv", url)))
+func normalize(url string) (string, error) {
+	parsed, err := urlx.Parse(strings.TrimSuffix(url, "/"))
+	if err != nil {
+		return "", err
+	}
+	normalized, err := urlx.Normalize(parsed)
+	if err != nil {
+		return "", err
+	}
+	return normalized, nil
+}
+
+func getAdv(url string) ([]byte, error) {
+	advGet, err := http.Get(fmt.Sprintf("%s/adv", url))
+	if err != nil {
+		return nil, err
+	}
 	defer advGet.Body.Close()
-	return try.To1(ioutil.ReadAll(advGet.Body)), nil
+	body, err := ioutil.ReadAll(advGet.Body)
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (r TangAdvertiser) Resolve() ([]byte, error) {
+	url, err := normalize(r.url)
+	if err != nil {
+		return nil, fmt.Errorf(`malformed url "%s": %w`, err)
+	}
+	body, err := getAdv(url)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP GET to Tang for advertisement failed: %w", err)
+	}
+	return body, nil
 }
 
 func (r TangAdvertiser) URL() (string) {
@@ -128,32 +130,38 @@ func (r TangAdvertiser) URL() (string) {
 
 var NoValidationKeysFound = fmt.Errorf("no advertised validation keys match thumbprints")
 
-func getKey(keySet jwk.Set, sought jwk.KeyOperation, thumbprints []string) (key jwk.Key, err error) {
-	defer err2.Handle(&err, handler.Handler(&err))
+func getKey(keySet jwk.Set, operation jwk.KeyOperation, thumbprints []string) (key jwk.Key, err error) {
 	ctx := context.Background()
 	for iterator := keySet.Iterate(ctx); iterator.Next(ctx); {
 		key := iterator.Pair().Value.(jwk.Key)
 		for _, op := range key.KeyOps() {
-			if op == sought {
+			if op == operation {
 				for _, thumbprint := range thumbprints {
-					if thumbprint == encode64(try.To1(key.Thumbprint(crypto.SHA256))) {
+					actual, err := key.Thumbprint(crypto.SHA256)
+					if err != nil {
+						return nil, fmt.Errorf(`unable to get thumbprint for "%s" key: %w`, op, err)
+					}
+					if thumbprint == encode64(actual) {
 						return key, nil
 					}
 				}
 			}
 		}
 	}
-	return nil, NoValidationKeysFound
+	return nil, nil
 }
 
-func getSortedThumbprints(keySet jwk.Set, sought jwk.KeyOperation) (thumbprints []string, err error) {
-	defer err2.Handle(&err)
+func getSortedThumbprints(keySet jwk.Set, operation jwk.KeyOperation) (thumbprints []string, err error) {
 	ctx := context.Background()
 	for iterator := keySet.Iterate(ctx); iterator.Next(ctx); {
 		key := iterator.Pair().Value.(jwk.Key)
 		for _, op := range key.KeyOps() {
-			if op == sought {
-				thumbprints = append(thumbprints, encode64(try.To1(key.Thumbprint(crypto.SHA256))))
+			if op == operation {
+				thumbprint, err := key.Thumbprint(crypto.SHA256)
+				if err != nil {
+					return nil, fmt.Errorf(`unable to get thumbprint for "%s" key: %w`, op, err)
+				}
+				thumbprints = append(thumbprints, encode64(thumbprint))
 			}
 		}
 	}
@@ -161,133 +169,150 @@ func getSortedThumbprints(keySet jwk.Set, sought jwk.KeyOperation) (thumbprints 
 	return thumbprints, nil
 }
 
-func findKey(keySet jwk.Set, sought jwk.KeyOperation) (key jwk.Key, err error) {
-	defer err2.Handle(&err, handler.Handler(&err))
-	ctx := context.Background()
-	for iterator := keySet.Iterate(ctx); iterator.Next(ctx); {
-		key := iterator.Pair().Value.(jwk.Key)
-		for _, op := range key.KeyOps() {
-			if op == sought {
-				return key, nil
-			}
-		}
-	}
-	return nil, fmt.Errorf("key for operation %s not found", sought)
-}
-
-func Thumbprints(advJSON []byte) (err error) {
-	defer err2.Handle(&err, handler.Handler(&err))
-	message := try.To1(jws.Parse(advJSON))
-	keySet := try.To1(jwk.Parse(message.Payload()))
-	ctx := context.Background()
-	for iterator := keySet.Iterate(ctx); iterator.Next(ctx); {
-		key := iterator.Pair().Value.(jwk.Key)
-		fmt.Fprintf(os.Stderr, "%s\n", encode64(try.To1(key.Thumbprint(crypto.SHA256))))
-		fmt.Fprintf(os.Stderr, "kid %v x\n", key.KeyID())
-	}
-	return nil
-}
-
 func getExchangeKey(url string, advJSON []byte, thumbprints []string) (k *Exchange, err error) {
-	message := try.To1(jws.Parse(advJSON))
-	keySet := try.To1(jwk.Parse(message.Payload()))
+	message, err := jws.Parse(advJSON)
+	if err != nil {
+		return nil, fmt.Errorf("unable to parse advertisement JSON: %w", err)
+	}
 
-	verifyKey := try.To1(getKey(keySet, jwk.KeyOpVerify, thumbprints))
-	try.To1(jws.Verify(advJSON, jwa.ES512, verifyKey))
+	keySet, err := jwk.Parse(message.Payload())
+	if err != nil {
+		return nil, fmt.Errorf("unable to parse advertisement key set: %w", err)
+	}
 
-	sorted := try.To1(getSortedThumbprints(keySet, jwk.KeyOpDeriveKey))
+	verifyKey, err := getKey(keySet, jwk.KeyOpVerify, thumbprints)
+	if err != nil {
+		return nil, err
+	}
+	if verifyKey == nil {
+		return nil, NoValidationKeysFound
+	}
+
+	_, err = jws.Verify(advJSON, jwa.ES512, verifyKey)
+	if err != nil {
+		return nil, fmt.Errorf("signature invalid: %w", err)
+	}
+
+	sorted, err := getSortedThumbprints(keySet, jwk.KeyOpDeriveKey)
+	if err != nil {
+		return nil, err
+	}
 	if len(sorted) == 0 {
 		return nil, fmt.Errorf("no derive keys found in advertisement")
 	}
 
-	exchangeKey := try.To1(getKey(keySet, jwk.KeyOpDeriveKey, []string{ sorted[0] }))
-	try.To(exchangeKey.Set(jwk.KeyOpsKey, jwk.KeyOperationList{}))
-	try.To(exchangeKey.Set(jwk.AlgorithmKey, ""))
+	exchangeKey, err := getKey(keySet, jwk.KeyOpDeriveKey, []string{ sorted[0] })
+	if err != nil {
+		return nil, err
+	}
+
+	err = func() (err error) {
+		err = exchangeKey.Set(jwk.KeyOpsKey, jwk.KeyOperationList{})
+		if err != nil {
+			return err
+		}
+		err = exchangeKey.Set(jwk.AlgorithmKey, "")
+		if err != nil {
+			return err
+		}
+		return nil
+	} ()
+	if err != nil {
+		return nil, fmt.Errorf("unable to format exchange key: %w", err)
+	}
 
 	headers := jwe.NewHeaders()
 
-	try.To(headers.Set(jwe.KeyIDKey, encode64(try.To1(exchangeKey.Thumbprint(crypto.SHA256)))))
-	try.To(headers.Set(jwe.ContentEncryptionKey, jwa.A256GCM))
-	try.To(headers.Set(jwe.AlgorithmKey, jwa.ECDH_ES))
+	// Okay, this is stupid. Why am I doing this? I want an exception handling
+	// system that will throw a stack trace and take me to where these errors
+	// occurred if there is something about these function calls that actually
+	// generates and error. I'll never handle them, it would only be due to a
+	// misconfiguratio or bug in the jwx library or Tang or elsewhere.
 
-	clevis := try.To1(json.Marshal(&jsonClevis{
-		Plugin: "tang",
-		Tang: jsonTang{
-			Location:      url,
-			Advertisement: message.Payload(),
-		},
-	}))
-	try.To(headers.Set("clevis", json.RawMessage(clevis)))
+	err = func() (err error) {
+		thumbprint, err := exchangeKey.Thumbprint(crypto.SHA256)
+		if err != nil {
+			return err
+		}
+		err = headers.Set(jwe.KeyIDKey, encode64(thumbprint))
+		if err != nil {
+			return err
+		}
+		err = headers.Set(jwe.ContentEncryptionKey, jwa.A256GCM)
+		if err != nil {
+			return err
+		}
+		err = headers.Set(jwe.AlgorithmKey, jwa.ECDH_ES)
+		if err != nil {
+			return err
+		}
+		clevis, err := json.Marshal(&jsonClevis{
+			Plugin: "tang",
+			Tang: jsonTang{
+				Location:      url,
+				Advertisement: message.Payload(),
+			},
+		})
+		if err != nil {
+			return err
+		}
+		err = headers.Set("clevis", json.RawMessage(clevis))
+		if err != nil {
+			return err
+		}
+		return nil
+	}()
+	if err != nil {
+		return nil, fmt.Errorf("unable to set exchange key headers: %w", err)
+	}
 
 	return &Exchange {
-		keyID:       sorted[0],
+		KeyID:       sorted[0],
 		headers:     headers,
 		exchangeKey: exchangeKey,
 	}, nil
 }
 
-func getExcahngeKeyAndMaybeRefresh(thumbprinter Thumbprinter, advertiser Advertiser) (k *Exchange, err error) {
-	defer err2.Handle(&err)
-	advertisement := try.To1(advertiser.Resolve())
-	stuff, err := getExchangeKey(advertiser.URL(), advertisement, thumbprinter.Thumbprints())
-	if try.Is(err, NoValidationKeysFound) {
-		thumbprinter.Refresh()
-		stuff = try.To1(getExchangeKey("", advertisement, thumbprinter.Thumbprints()))
-	}
-	return stuff, nil
-}
-
-type RotatingCrypter struct {
-	thumbprinter Thumbprinter
-	advertiser Advertiser
-}
-
-func NewRotatingCrypter(thumbprinter Thumbprinter, advertiser Advertiser) (crypter *RotatingCrypter, err error) {
-	return &RotatingCrypter{thumbprinter: thumbprinter, advertiser: advertiser}, nil
-}
-
-func (c RotatingCrypter) Status () (keyID string, err error) {
-	defer err2.Handle(&err)
-	exchange := try.To1(getExcahngeKeyAndMaybeRefresh(c.thumbprinter, c.advertiser))
-	return exchange.keyID, nil
-}
-
-func NewCrypter(url string, thumbprint string) (crypter *Crypter, err error) {
-	defer err2.Handle(&err, handler.Handler(&err))
-	thumbprinter := NewStaticThumbprinter(thumbprint)
-	advertiser := NewTangAdvertiser(url)
-	exchange := try.To1(getExcahngeKeyAndMaybeRefresh(thumbprinter, advertiser))
-	return &Crypter{ exchange: exchange }, nil
-}
-
-func (c *Crypter) Encrypt(plain []byte) (cipher []byte, err error) {
-	defer err2.Handle(&err)
-	return try.To1(jwe.Encrypt(plain, jwa.ECDH_ES, c.exchange.exchangeKey, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(c.exchange.headers))), nil
-}
-
-func Decrypt(cipher []byte) (plain []byte, err error) {
-	defer err2.Handle(&err)
-	return try.To1(clevis.Decrypt(cipher)), nil
-}
-
-func (c Crypter) Health() error {
-	randomPlaintext := RandomHex(8)
-	cipher, err := c.Encrypt([]byte(randomPlaintext))
+func getExchangeKeyAndMaybeRefresh(thumbprinter Thumbprinter, advertiser Advertiser) (*Exchange, error) {
+	advertisement, err := advertiser.Resolve()
+	exchange, err := getExchangeKey(advertiser.URL(), advertisement, thumbprinter.Thumbprints())
 	if err != nil {
-		return errors.Wrap(err, "failed to encrypt random text")
+		switch {
+		case errors.Is(err, NoValidationKeysFound):
+			thumbprinter.Refresh()
+			exchange, err = getExchangeKey(advertiser.URL(), advertisement, thumbprinter.Thumbprints())
+			if err != nil {
+				return nil, err
+			}
+		default:
+			return nil, err
+		}
 	}
-	decryptedText, err := Decrypt(cipher)
-	if err != nil {
-		return errors.Wrap(err, "failed to decrypt random cipher text")
-	}
-	if randomPlaintext != string(decryptedText) {
-		return errors.Errorf("decrypted text does not equal input random text: want: %s got: %s", randomPlaintext, decryptedText)
-	}
-	return nil
+	return exchange, nil
 }
 
-func init() {
-	rand.Seed(time.Now().UnixNano())
+func NewCrypter(thumbprinter Thumbprinter, advertiser Advertiser) (crypter *Crypter) {
+	return &Crypter{ thumbprinter: thumbprinter, advertiser: advertiser }
+}
+
+func (c *Crypter) GetExchangeKey() (*Exchange, error) {
+	return getExchangeKeyAndMaybeRefresh(c.thumbprinter, c.advertiser)
+}
+
+func (c *Crypter) Encrypt(exchange *Exchange, plain []byte) ([]byte, error) {
+	cipher, err := jwe.Encrypt(plain, jwa.ECDH_ES, exchange.exchangeKey, jwa.A256GCM, jwa.NoCompress, jwe.WithProtectedHeaders(exchange.headers))
+	if err != nil {
+		return nil, fmt.Errorf("encyption failed: %w", err)
+	}
+	return cipher, nil
+}
+
+func Decrypt(cipher []byte) ([]byte, error) {
+	 plain, err := clevis.Decrypt(cipher)
+	 if err != nil {
+		return nil, fmt.Errorf("decryption failed: %w", err)
+	 }
+	 return plain, nil
 }
 
 func RandomHex(n int) string {

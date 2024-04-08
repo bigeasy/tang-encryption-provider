@@ -5,9 +5,24 @@ import (
 	"github.com/lainio/err2/try"
 	"fmt"
 	"os"
-//	"github.com/ory/dockertest/v3"
-//	"github.com/lainio/err2"
 )
+
+type StaticAdvertiser struct {
+	advertisement string
+	url string
+}
+
+func NewStaticAdvertiser (url string, advertisement string) (advertiser StaticAdvertiser) {
+	return StaticAdvertiser{url: url, advertisement: advertisement}
+}
+
+func (r *StaticAdvertiser) Resolve() (advertisement []byte, err error) {
+	return []byte(r.advertisement), nil
+}
+
+func (r *StaticAdvertiser) URL() (string) {
+	return r.url
+}
 
 func TestGetExchangeKey(t *testing.T) {
 	advJSON := `
@@ -49,7 +64,7 @@ func TestNewRotatingCrypter(t *testing.T) {
 	fmt.Fprintf(os.Stderr, "%s\n", os.Getenv("TANG_URL"))
 	thumbprinter := NewStaticThumbprinter("2P5B1BrEu6ltBlfu8EWHUVxAJX6FRLCmTQUPsAHySa8")
 	advertiser := NewTangAdvertiser(os.Getenv("TANG_URL"))
-	crypter := try.To1(NewRotatingCrypter(thumbprinter, advertiser))
+	crypter := NewRotatingCrypter(thumbprinter, advertiser)
 	keyID := try.To1(crypter.Status())
 	if keyID != "4lMfqjgBHEHk4OoAKzM2JOXgcEqcBhtyA2IyDNqF_EU" {
 		t.Fatalf("expected key %s and got %s", "4lMfqjgBHEHk4OoAKzM2JOXgcEqcBhtyA2IyDNqF_EU", keyID)
