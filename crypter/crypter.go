@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto"
 	"errors"
-	cryptoRand "crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"slices"
 	"strings"
@@ -87,37 +85,33 @@ func NewTangAdvertiser (url string) (advertiser TangAdvertiser) {
 	return TangAdvertiser{url: url}
 }
 
-func normalize(url string) (string, error) {
-	parsed, err := urlx.Parse(strings.TrimSuffix(url, "/"))
-	if err != nil {
-		return "", err
-	}
-	normalized, err := urlx.Normalize(parsed)
-	if err != nil {
-		return "", err
-	}
-	return normalized, nil
-}
-
-func getAdv(url string) ([]byte, error) {
-	advGet, err := http.Get(fmt.Sprintf("%s/adv", url))
-	if err != nil {
-		return nil, err
-	}
-	defer advGet.Body.Close()
-	body, err := ioutil.ReadAll(advGet.Body)
-	if err != nil {
-		return nil, err
-	}
-	return body, nil
-}
-
 func (r TangAdvertiser) Resolve() ([]byte, error) {
-	url, err := normalize(r.url)
+	url, err := func() (string, error) {
+		parsed, err := urlx.Parse(strings.TrimSuffix(r.url, "/"))
+		if err != nil {
+			return "", err
+		}
+		normalized, err := urlx.Normalize(parsed)
+		if err != nil {
+			return "", err
+		}
+		return normalized, nil
+	}()
 	if err != nil {
-		return nil, fmt.Errorf(`malformed url "%s": %w`, err)
+		return nil, fmt.Errorf(`malformed url "%s": %w`, r.url, err)
 	}
-	body, err := getAdv(url)
+	body, err := func() ([]byte, error) {
+		advGet, err := http.Get(fmt.Sprintf("%s/adv", url))
+		if err != nil {
+			return nil, err
+		}
+		defer advGet.Body.Close()
+		body, err := ioutil.ReadAll(advGet.Body)
+		if err != nil {
+			return nil, err
+		}
+		return body, nil
+	} ()
 	if err != nil {
 		return nil, fmt.Errorf("HTTP GET to Tang for advertisement failed: %w", err)
 	}
@@ -275,6 +269,9 @@ func getExchangeKey(url string, advJSON []byte, thumbprints []string) (k *Exchan
 
 func getExchangeKeyAndMaybeRefresh(thumbprinter Thumbprinter, advertiser Advertiser) (*Exchange, error) {
 	advertisement, err := advertiser.Resolve()
+	if err != nil {
+		return nil, fmt.Errorf("advertisement HTTP GET failed: %w", err)
+	}
 	exchange, err := getExchangeKey(advertiser.URL(), advertisement, thumbprinter.Thumbprints())
 	if err != nil {
 		switch {
@@ -313,16 +310,4 @@ func Decrypt(cipher []byte) ([]byte, error) {
 		return nil, fmt.Errorf("decryption failed: %w", err)
 	 }
 	 return plain, nil
-}
-
-func RandomHex(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	buf := make([]byte, (n/2)+(n%2))
-	if _, err := cryptoRand.Read(buf); err != nil {
-		fmt.Println(err)
-		return ""
-	}
-	return hex.EncodeToString(buf)[:n]
 }

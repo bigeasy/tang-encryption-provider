@@ -17,13 +17,14 @@ import (
 type Specification struct {
 	TangURL          string `envconfig:"tang_url"`
 	Thumbprints      string `envconfig:"thumbprints"`
-	ThumbprintUrl    string `envconfig:"thumbprint_url"`
+	ThumbprintURL    string `envconfig:"thumbprint_url"`
 	ThumbprintCACert string `envconfig:"thumbprint_ca_cert"`
-	MetricsPort   	 string `envconfig:"metrics_port" default:8082`
+	MetricsPort   	 int 	`envconfig:"metrics_port" default:"8082"`
 	MetricsPath   	 string `envconfig:"metrics_path" default:"/metrics"`
 	Version          string `default:"v2"`
 	UnixSocket       string `envconfig:"unix_socket" default:"/var/run/kmsplugin/socket.sock"`
-	HealthzPort      string `envconfig:"healthz_port" default:"8081"`
+	HealthzPort      int 	`envconfig:"healthz_port" default:"8081"`
+	HealthzPath      string `envconfig:"healthz_path" default:"/healthz"`
 	HealthzTimeout	 int64  `envconfig:"healthz_grpc_call_timeout" default:"5000"`
 }
 
@@ -42,13 +43,13 @@ func main() {
 		slog.String("thumbprints", spec.Thumbprints),
 		slog.String("unix_socket", spec.UnixSocket),
 		slog.String("version", spec.Version),
+		slog.String("tang_url", spec.TangURL),
 	)
-	metrics := &plugin.Metrics{
-		ServingURL: &url.URL{
-			Host: fmt.Sprintf("localhost:%d", spec.MetricsPort),
-			Path: spec.MetricsPath,
-		},
-	}
+	logger.Info("metrics port", slog.Int("metrics_port", spec.MetricsPort))
+	mm := plugin.NewMetricsManager(logger, &url.URL{
+		Host: fmt.Sprintf("127.0.0.1:%d", spec.MetricsPort),
+		Path: spec.MetricsPath,
+	})
 	var g plugin.Plugin
 	var healthz plugin.HealthChecker
 	switch spec.Version {
@@ -70,11 +71,11 @@ func main() {
 	}
 	gm := plugin.NewManager(g, spec.UnixSocket)
 	callTimeout := time.Duration(spec.HealthzTimeout) * time.Millisecond
-	hm := plugin.NewHealthChecker(healthz, spec.UnixSocket, callTimeout, &url.URL{
-		Host: fmt.Sprintf("localhost:%d", spec.MetricsPort),
-		Path: spec.MetricsPath,
+	hm := plugin.NewHealthChecker(logger, healthz, spec.UnixSocket, callTimeout, &url.URL{
+		Host: fmt.Sprintf("127.0.0.1:%d", spec.HealthzPort),
+		Path: spec.HealthzPath,
 	})
-	err = plugin.Run(logger, gm, hm, metrics)
+	err = plugin.Run(logger, gm, hm, mm)
 	if err != nil {
 		abend("abend", err)
 	}

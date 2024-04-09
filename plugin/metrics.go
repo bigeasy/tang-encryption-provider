@@ -15,28 +15,33 @@
 package plugin
 
 import (
-	"fmt"
 	"net/http"
 	"net/url"
+	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Metrics encapsulates functionality related to serving Prometheus metrics for kms-plugin.
 type Metrics struct {
-	ServingURL *url.URL
+	logger 	   *slog.Logger
+	servingURL *url.URL
+}
+
+func NewMetricsManager(logger *slog.Logger, servingURL *url.URL) *Metrics {
+	return &Metrics{logger: logger, servingURL: servingURL}
 }
 
 // Serve creates http server for hosting Prometheus metrics.
 func (m *Metrics) Serve() chan error {
 	errorChan := make(chan error)
 	mux := http.NewServeMux()
-	mux.Handle(fmt.Sprintf("/%s", m.ServingURL.EscapedPath()), promhttp.Handler())
+	mux.Handle(m.servingURL.EscapedPath(), promhttp.Handler())
 
 	go func() {
 		defer close(errorChan)
-		//glog.Infof("Registering Metrics listener on port %s", m.ServingURL.Port())
-		errorChan <- http.ListenAndServe(m.ServingURL.Host, mux)
+		m.logger.Info("registering metrics listener", slog.String("serving_url", m.servingURL.String()))
+		errorChan <- http.ListenAndServe(m.servingURL.Host, mux)
 	}()
 
 	return errorChan

@@ -2,71 +2,134 @@ package crypter
 
 import (
 	"testing"
-	"github.com/lainio/err2/try"
 	"fmt"
+	"strings"
+	"time"
+	"path"
 	"os"
+	"github.com/stretchr/testify/assert"
+	"log/slog"
 )
 
-type StaticAdvertiser struct {
-	advertisement string
-	url string
+type key struct {
+	thumbprint string
+	json string
 }
 
-func NewStaticAdvertiser (url string, advertisement string) (advertiser StaticAdvertiser) {
-	return StaticAdvertiser{url: url, advertisement: advertisement}
+var keys = map[string]key {
+	"verify1": key{
+		thumbprint: "2P5B1BrEu6ltBlfu8EWHUVxAJX6FRLCmTQUPsAHySa8",
+		json: `{
+			"alg": "ES512",
+			"kty": "EC",
+			"crv": "P-521",
+			"x": "AJCrbFS1G3u2SxjJ3WViStrIp2dzut7RdXjregQxlGE3uAJoQnXSSQEx3JE8zmtT_GBRsRz7oMx3diIEnhqLMQoo",
+			"y": "AXNLBGll9QMc7Kkz1gLgWVPOPXQWd87GGA4g658nBgGi396f0jBimtIdk-LPUCqa3bJZjd963-rpH8yfbOLZDxDc",
+			"d": "AOS4GCrUkaAWem0iExEnn6fdshtneFZLCtwKS-n-JIYs1WviRyc1XDqjAdvhK7o1VJz40xLIZZFKq9lVT_QI-6oF",
+			"key_ops": ["sign", "verify"]
+		}`,
+	},
+	"derive1": key{
+		thumbprint: "gWOHi5Tdcu10RKlTNOo7S8VvdN4a580N07dmU7HDqsM",
+		json: `{
+			"alg": "ECMR",
+			"kty": "EC",
+			"crv": "P-521",
+			"x": "AZWjfI7xyz0ueTNHJHmeIyZNQtP-0ZJUM-z9kHbqkdcwgHrjLF8e6YhhM8WkDm1TyUSfIY0SrBue1jwx4O7RxD7P",
+			"y": "AEKAvEx87TzD-IhkYYLT17XUFeF6rbtfQd6Z7D-fm7t8O1me761RSGxPzC_Nh0XWepKmvpI1qi_XRpYMSOHOEI6U",
+			"d": "AU0YEuEd4nypa_jn4VjGUpT_yg-nhM7vfHUc2WGUgYt9JKl6g22-n3kUBF0TJsL9nJRK3r82U5becc5tkDxZVW9_",
+			"key_ops": ["deriveKey"]
+		}`,
+	},
+	"verify2": key{
+		thumbprint: "fkCRLeUN3YozTn5g3aKxNy1EwyBOF8fFA-fmsoPJxUo",
+		json: `{
+			"alg": "ES512",
+			"kty": "EC",
+			"crv": "P-521",
+			"x": "AVQQCjn4ySvvORJNdRyUN2crLz4yQf5YgWlRjitMUq3NOLZHmr06t2N71H3q7djsLIHd7wKZ4wrBZs-JEYaeSEoY",
+			"y": "AOTEPw2qt7ydYIvJk5pplrkr6H03GDNtGOgSU06fHxFrBFSxyrKCnYEtnEJTfqDFIgAhevOxM1JQF6myO65shVat",
+			"d": "AUd1CgtI56UesO1QM-EsmGPtxahDU-bKqH1JubdLOOeNNQBkixTGM-HouWUX2seepGLvPFFt7YctA0-8aPyeiXUC",
+			"key_ops": ["sign", "verify"]
+		}`,
+	},
+	"derive2": key{
+		thumbprint: "UCPvN8PxVGWck72Tra2qgGzDC6l3VeR6y-coQFGbm9c",
+		json: `{
+			"alg": "ECMR",
+			"kty": "EC",
+			"crv": "P-521",
+			"x": "AbsW1JRf1bByL1lXk_pDJQO1ZTdeCZuPzsn0s8AsK6P5BBzz0vnz5c25j-QcK8Tx8i3jODHV0ZXZRFF7VpSyyZjs",
+			"y": "AHklbog5546zZ8c06A1GmgHmomtRKLnyQo0wFXxeFmezE7gMyJzYY4yzBXWut2HhNKq2H9_rZOfWyVFYkya8iok3",
+			"d": "AHG6vJyToh7idqqTh58Lsg25KgHtIKKdJtzeg5YKk8h1qtVF_lh0FUB1kIjMfkAu7DRuE_WjQ5GXpjCsdIH08Hr7",
+			"key_ops": ["deriveKey"]
+		}`,
+	},
 }
 
-func (r *StaticAdvertiser) Resolve() (advertisement []byte, err error) {
-	return []byte(r.advertisement), nil
+var lvl = new(slog.LevelVar)
+
+func setupSuite(m *testing.M) func(m *testing.M) {
+	slog.Info("setup suite")
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: lvl,
+	})))
+	lvl.Set(slog.LevelDebug)
+	return func(m *testing.M) {
+		slog.Info("teardown suite")
+		slog.Debug("teardown suite")
+	}
 }
 
-func (r *StaticAdvertiser) URL() (string) {
-	return r.url
+func TestMain(m *testing.M) {
+	os.Exit(func () int {
+		teardown := setupSuite(m)
+		defer teardown(m)
+		return m.Run()
+	} ())
 }
 
-func TestGetExchangeKey(t *testing.T) {
-	advJSON := `
-		{
-		  "payload": "eyJrZXlzIjogW3siYWxnIjogIkVDTVIiLCAia3R5IjogIkVDIiwgImNydiI6ICJQLTUyMSIsICJ4IjogIkFic1cxSlJmMWJCeUwxbFhrX3BESlFPMVpUZGVDWnVQenNuMHM4QXNLNlA1QkJ6ejB2bno1YzI1ai1RY0s4VHg4aTNqT0RIVjBaWFpSRkY3VnBTeXlaanMiLCAieSI6ICJBSGtsYm9nNTU0NnpaOGMwNkExR21nSG1vbXRSS0xueVFvMHdGWHhlRm1lekU3Z015SnpZWTR5ekJYV3V0MkhoTktxMkg5X3JaT2ZXeVZGWWt5YThpb2szIiwgImtleV9vcHMiOiBbImRlcml2ZUtleSJdfSwgeyJhbGciOiAiRUNNUiIsICJrdHkiOiAiRUMiLCAiY3J2IjogIlAtNTIxIiwgIngiOiAiQUVBRmpJN3ZXeFNoVGFldThmUnN2ZENiZTZ0bTd3LUMyd2EzcXRTd1ZEdk5jc2pzX1NWQUItZzBUYUk5OVptUnRMTnIyeUNMMjBRZ2NBbTJQZEptZmUzTyIsICJ5IjogIkFOcElWT3hFRmF0QXVXWjYwYkdpUXI1RllkLXdrakdpNkVYbnBpU0VIRmJfOHc5aWh1NFBzUTNQRlJpcjV4dk94bUpkQVo3MGxWR2lCcFVlaUI5YzItcHQiLCAia2V5X29wcyI6IFsiZGVyaXZlS2V5Il19LCB7ImFsZyI6ICJFUzUxMiIsICJrdHkiOiAiRUMiLCAiY3J2IjogIlAtNTIxIiwgIngiOiAiQUpDcmJGUzFHM3UyU3hqSjNXVmlTdHJJcDJkenV0N1JkWGpyZWdReGxHRTN1QUpvUW5YU1NRRXgzSkU4em10VF9HQlJzUno3b014M2RpSUVuaHFMTVFvbyIsICJ5IjogIkFYTkxCR2xsOVFNYzdLa3oxZ0xnV1ZQT1BYUVdkODdHR0E0ZzY1OG5CZ0dpMzk2ZjBqQmltdElkay1MUFVDcWEzYkpaamQ5NjMtcnBIOHlmYk9MWkR4RGMiLCAia2V5X29wcyI6IFsidmVyaWZ5Il19LCB7ImFsZyI6ICJFUzUxMiIsICJrdHkiOiAiRUMiLCAiY3J2IjogIlAtNTIxIiwgIngiOiAiQVZRUUNqbjR5U3Z2T1JKTmRSeVVOMmNyTHo0eVFmNVlnV2xSaml0TVVxM05PTFpIbXIwNnQyTjcxSDNxN2Rqc0xJSGQ3d0taNHdyQlpzLUpFWWFlU0VvWSIsICJ5IjogIkFPVEVQdzJxdDd5ZFlJdkprNXBwbHJrcjZIMDNHRE50R09nU1UwNmZIeEZyQkZTeHlyS0NuWUV0bkVKVGZxREZJZ0FoZXZPeE0xSlFGNm15TzY1c2hWYXQiLCAia2V5X29wcyI6IFsidmVyaWZ5Il19XX0",
-		  "signatures": [
-			{
-			  "signature": "ALXcO_pEioY1-vIb4MHMAzJ8IsKilBwDSgeJzur2wBpIcOAvKVk37kyt41SvEwinkk_7IhudI63G_RZDkmcp1WUnAdzT9R4CVjCAlrxKYUaySktoy9yafMxLi01jyAjzwUaCry9TkKWnaGqUbfYVPys1zTcoznZgoaiQ40VLq-O_kKk8",
-			  "protected": "eyJhbGciOiJFUzUxMiIsImN0eSI6Imp3ay1zZXQranNvbiJ9"
-			},
-			{
-			  "protected": "eyJhbGciOiJFUzUxMiIsImN0eSI6Imp3ay1zZXQranNvbiJ9",
-			  "signature": "AVkpEi4oS5vq9OVZ4JWpwIbrEzRivqb9PIeV_D7VH15S0RfVA0FlWo_huW-1VNWNCOMEXPrcob8mZegI-v8sdBJtAVHO6Ky0hvHMFhpDJjF0_XV-TSfgCMENv2a4BsUJo18Rojp3WrHwHctoppx9RFR5kP6DZisIKvKsi54xbLdBOA0K"
-			}
-		  ]
+func writeKey(t *testing.T, key string, now int64, test string) {
+	f, err := os.Create(path.Join(os.Getenv("TANG_DATA"), fmt.Sprintf("%d-%s-%s.jwk", now, test, keys[key].thumbprint)))
+	assert.NoError(t, err)
+	_, err = f.WriteString(keys[key].json)
+	assert.NoError(t, err)
+}
+
+func wipeDir(t *testing.T, now int64, test string) {
+	f, err := os.Open(os.Getenv("TANG_DATA"))
+	assert.NoError(t, err)
+	defer f.Close()
+	fileInfo, err := f.Readdir(-1)
+	assert.NoError(t, err)
+	for _, file := range fileInfo {
+		if ! strings.HasPrefix(file.Name(), fmt.Sprintf("%d-%s-", now, test)) {
+			slog.Info("delete", "file", path.Join(os.Getenv("TANG_DATA"), file.Name()))
+			assert.NoError(t, os.Remove(path.Join(os.Getenv("TANG_DATA"), file.Name())))
 		}
-
-	`
-	thumbprinter := NewStaticThumbprinter("2P5B1BrEu6ltBlfu8EWHUVxAJX6FRLCmTQUPsAHySa8")
-	advertiser := NewStaticAdvertiser("http://127.0.0.1:8080", advJSON)
-	exchange := try.To1(getExcahngeKeyAndMaybeRefresh(thumbprinter, advertiser))
-	if exchange.keyID != "4lMfqjgBHEHk4OoAKzM2JOXgcEqcBhtyA2IyDNqF_EU" {
-		t.Fatalf("expected key %s and got %s", "4lMfqjgBHEHk4OoAKzM2JOXgcEqcBhtyA2IyDNqF_EU", exchange.keyID)
 	}
 }
 
-func TestCrypter(t *testing.T) {
-	fmt.Fprintf(os.Stderr, "%s\n", os.Getenv("TANG_URL"))
-	crypter := try.To1(NewCrypter(os.Getenv("TANG_URL"), "2P5B1BrEu6ltBlfu8EWHUVxAJX6FRLCmTQUPsAHySa8"))
-	ciphertext := try.To1(crypter.Encrypt([]byte("hello")))
-	fmt.Fprintf(os.Stderr, "%s\n", ciphertext)
-	plaintext := try.To1(Decrypt(ciphertext))
-	if string(plaintext) != "hello" {
-		t.Fatalf("crypter encryption failed")
-	}
+func retireKey(t *testing.T, key string, now int64, test string) {
+	from := path.Join(os.Getenv("TANG_DATA"), fmt.Sprintf("%d-%s-%s.jwk", now, test, keys[key].thumbprint))
+	to := path.Join(os.Getenv("TANG_DATA"), fmt.Sprintf(".%d-%s-%s.jwk", now, test, keys[key].thumbprint))
+	assert.NoError(t, os.Rename(from, to))
 }
 
-func TestNewRotatingCrypter(t *testing.T) {
-	fmt.Fprintf(os.Stderr, "%s\n", os.Getenv("TANG_URL"))
+func TestStaticThumbprint(t *testing.T) {
+	now := time.Now().Unix()
+	slog.Info("test", "TANG_URL", os.Getenv("TANG_URL"), "TANG_DATA", os.Getenv("TANG_DATA"))
+	writeKey(t, "verify1", now, "thumbprint")
+	writeKey(t, "derive1", now, "thumbprint")
+	wipeDir(t, now, "thumbprint")
 	thumbprinter := NewStaticThumbprinter("2P5B1BrEu6ltBlfu8EWHUVxAJX6FRLCmTQUPsAHySa8")
 	advertiser := NewTangAdvertiser(os.Getenv("TANG_URL"))
-	crypter := NewRotatingCrypter(thumbprinter, advertiser)
-	keyID := try.To1(crypter.Status())
-	if keyID != "4lMfqjgBHEHk4OoAKzM2JOXgcEqcBhtyA2IyDNqF_EU" {
-		t.Fatalf("expected key %s and got %s", "4lMfqjgBHEHk4OoAKzM2JOXgcEqcBhtyA2IyDNqF_EU", keyID)
+	crypter := NewCrypter(thumbprinter, advertiser)
+	exchange, err := crypter.GetExchangeKey()
+	if assert.NoError(t, err) {
+		assert.Equal(t, "gWOHi5Tdcu10RKlTNOo7S8VvdN4a580N07dmU7HDqsM", exchange.KeyID)
 	}
+	cipher, err := crypter.Encrypt(exchange, []byte("hello"))
+	plain, err := Decrypt(cipher)
+	fmt.Println(string(plain))
 }

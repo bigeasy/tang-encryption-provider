@@ -20,7 +20,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"fmt"
 	"log/slog"
 )
 
@@ -37,7 +36,8 @@ func Run(logger *slog.Logger, p *PluginManager, h *HealthCheckerManager, m *Metr
 	for {
 		select {
 		case sig := <-signalsChan:
-			return fmt.Errorf("captured %v, shutting down kms-plugin", sig)
+			logger.Info("captured shutdown signal", slog.Any("signal", sig))
+			return nil
 		case kmsError := <-kmsErrorCh:
 			return kmsError
 		case metricsErr := <-metricsErrCh:

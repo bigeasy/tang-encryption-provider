@@ -11,7 +11,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	pbv1 "k8s.io/kms/apis/v1beta1"
+	v1 "k8s.io/kms/apis/v1beta1"
 
 	"github.com/flatheadmill/tang-encryption-provider/crypter"
 )
@@ -34,18 +34,18 @@ func encryptWithKMS(socket string) (error) {
 
 	defer conn.Close()
 
-	client := pbv1.NewKeyManagementServiceClient(conn)
+	client := v1.NewKeyManagementServiceClient(conn)
 
 	ctx := context.Background()
 
-	version, err := client.Version(ctx, &pbv1.VersionRequest{})
+	version, err := client.Version(ctx, &v1.VersionRequest{})
 	if err != nil {
 		return err
 	}
 
 	fmt.Fprintf(os.Stderr, "%v\n", version)
 
-	cipher, err := client.Encrypt(ctx, &pbv1.EncryptRequest{Plain: input})
+	cipher, err := client.Encrypt(ctx, &v1.EncryptRequest{Plain: input})
 	if err != nil {
 		return err
 	}

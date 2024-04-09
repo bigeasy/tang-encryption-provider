@@ -43,7 +43,9 @@ func (h *HealthChecker) PingRPC(ctx context.Context, conn *grpc.ClientConn) erro
 		return fmt.Errorf("failed to retrieve version from gRPC endpoint: %w", err)
 	}
 
-	h.logger.Info("Successfully pinged gRPC")
+	// Check response is actually "ok"
+
+	h.logger.Debug("Successfully pinged gRPC")
 	return nil
 }
 
@@ -65,5 +67,6 @@ func (h *HealthChecker) PingKMS(ctx context.Context, conn *grpc.ClientConn) erro
 		return fmt.Errorf("failed to ping KMS: %w", err)
 	}
 
+	h.logger.Debug("Successfully pinged KMS")
 	return nil
 }

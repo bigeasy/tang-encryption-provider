@@ -17,6 +17,7 @@ package plugin
 import (
 	"net/url"
 	"time"
+	"log/slog"
 
 	"context"
 	"fmt"
@@ -34,6 +35,7 @@ import (
 // 1. Getting version of the plugin - validates gRPC connectivity.
 // 2. Asserting that the caller has encrypt and decrypt permissions on the crypto key.
 type HealthCheckerManager struct {
+	logger		   *slog.Logger
 	unixSocketPath string
 	callTimeout    time.Duration
 	servingURL     *url.URL
@@ -46,10 +48,11 @@ type HealthChecker interface {
 	PingKMS(context.Context, *grpc.ClientConn) error
 }
 
-func NewHealthChecker(checker HealthChecker,
+func NewHealthChecker(logger *slog.Logger, checker HealthChecker,
 	unixSocketPath string, callTimeout time.Duration, servingURL *url.URL) *HealthCheckerManager {
 
 	return &HealthCheckerManager{
+		logger:         logger,
 		unixSocketPath: unixSocketPath,
 		callTimeout:    callTimeout,
 		servingURL:     servingURL,
@@ -61,11 +64,11 @@ func NewHealthChecker(checker HealthChecker,
 func (m *HealthCheckerManager) Serve() chan error {
 	errorCh := make(chan error)
 	mux := http.NewServeMux()
-	mux.HandleFunc(fmt.Sprintf("/%s", m.servingURL.EscapedPath()), m.HandlerFunc)
+	mux.HandleFunc(fmt.Sprintf("%s", m.servingURL.EscapedPath()), m.HandlerFunc)
 
 	go func() {
 		defer close(errorCh)
-		//glog.Infof("Registering healthz listener at %v", m.servingURL)
+		m.logger.Info("registering healthz listener", slog.String("serving_url", m.servingURL.String()))
 		select {
 		case errorCh <- http.ListenAndServe(m.servingURL.Host, mux):
 		default:
@@ -76,6 +79,7 @@ func (m *HealthCheckerManager) Serve() chan error {
 }
 
 func (m *HealthCheckerManager) HandlerFunc(w http.ResponseWriter, r *http.Request) {
+	m.logger.Info("called")
 	ctx, cancel := context.WithTimeout(r.Context(), m.callTimeout)
 	defer cancel()
 
