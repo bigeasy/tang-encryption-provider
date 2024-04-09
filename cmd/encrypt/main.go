@@ -57,10 +57,13 @@ func encryptWithKMS(socket string) (error) {
 
 func encryptWithTang(url string, thumbprint string) (err error) {
 	input, err := ioutil.ReadAll(os.Stdin)
-	if err != err {
+	if err != nil {
 		return err
 	}
-	thumbprinter := crypter.NewStaticThumbprinter(thumbprint)
+	thumbprinter, err := crypter.NewStaticThumbprinter(thumbprint)
+	if err != nil {
+		return err
+	}
 	advertiser := crypter.NewTangAdvertiser(url)
 	encrypter := crypter.NewCrypter(thumbprinter, advertiser)
 	exchange, err := encrypter.GetExchangeKey()

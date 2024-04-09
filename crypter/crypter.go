@@ -5,7 +5,6 @@ import (
 	"crypto"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"encoding/base64"
@@ -56,12 +55,29 @@ type staticThumbprinter struct {
 	thumbprints []string
 }
 
-func NewStaticThumbprinter (thumbprints string) staticThumbprinter {
+func parseThumbprints(thumbprints string) ([]string, error) {
+	pairs := make([]string, 8)
+	for _, pair := range strings.Split(thumbprints, ",") {
+		trimmed := strings.TrimSpace(pair)
+		pair := strings.Split(trimmed, "/")
+		if (len(pair) != 2) {
+			return nil, fmt.Errorf("malformed thumbprint pair: %s", trimmed)
+		}
+		pairs = append(pairs, strings.TrimSpace(pair[0]), strings.TrimSpace(pair[1]))
+	}
+	return pairs, nil
+}
+
+func NewStaticThumbprinter (thumbprints string) (*staticThumbprinter, error) {
 	split := strings.Split(thumbprints, ",")
 	for i, _ := range split {
 		split[i] = strings.TrimSpace(split[i])
 	}
-	return staticThumbprinter{thumbprints: split}
+	pairs, err := parseThumbprints(thumbprints)
+	if err != nil {
+		return nil, err
+	}
+	return &staticThumbprinter{thumbprints: pairs}, nil
 }
 
 func (r staticThumbprinter) Refresh() error {
@@ -124,45 +140,6 @@ func (r TangAdvertiser) URL() (string) {
 
 var NoValidationKeysFound = fmt.Errorf("no advertised validation keys match thumbprints")
 
-func getKey(keySet jwk.Set, operation jwk.KeyOperation, thumbprints []string) (key jwk.Key, err error) {
-	ctx := context.Background()
-	for iterator := keySet.Iterate(ctx); iterator.Next(ctx); {
-		key := iterator.Pair().Value.(jwk.Key)
-		for _, op := range key.KeyOps() {
-			if op == operation {
-				for _, thumbprint := range thumbprints {
-					actual, err := key.Thumbprint(crypto.SHA256)
-					if err != nil {
-						return nil, fmt.Errorf(`unable to get thumbprint for "%s" key: %w`, op, err)
-					}
-					if thumbprint == encode64(actual) {
-						return key, nil
-					}
-				}
-			}
-		}
-	}
-	return nil, nil
-}
-
-func getSortedThumbprints(keySet jwk.Set, operation jwk.KeyOperation) (thumbprints []string, err error) {
-	ctx := context.Background()
-	for iterator := keySet.Iterate(ctx); iterator.Next(ctx); {
-		key := iterator.Pair().Value.(jwk.Key)
-		for _, op := range key.KeyOps() {
-			if op == operation {
-				thumbprint, err := key.Thumbprint(crypto.SHA256)
-				if err != nil {
-					return nil, fmt.Errorf(`unable to get thumbprint for "%s" key: %w`, op, err)
-				}
-				thumbprints = append(thumbprints, encode64(thumbprint))
-			}
-		}
-	}
-	slices.Sort(thumbprints)
-	return thumbprints, nil
-}
-
 func getExchangeKey(url string, advJSON []byte, thumbprints []string) (k *Exchange, err error) {
 	message, err := jws.Parse(advJSON)
 	if err != nil {
@@ -174,30 +151,47 @@ func getExchangeKey(url string, advJSON []byte, thumbprints []string) (k *Exchan
 		return nil, fmt.Errorf("unable to parse advertisement key set: %w", err)
 	}
 
-	verifyKey, err := getKey(keySet, jwk.KeyOpVerify, thumbprints)
+	keys, err := func() (map[string]jwk.Key, error) {
+		keys := make(map[string]jwk.Key)
+		ctx := context.Background()
+		for iterator := keySet.Iterate(ctx); iterator.Next(ctx); {
+			key := iterator.Pair().Value.(jwk.Key)
+			thumbprint, err := key.Thumbprint(crypto.SHA256)
+			if err != nil {
+				return nil, fmt.Errorf(`unable to get thumbprint for "%s" key: %w`, key.KeyOps(), err)
+			}
+			keys[encode64(thumbprint)] = key
+		}
+		return keys, nil
+	} ()
 	if err != nil {
 		return nil, err
 	}
-	if verifyKey == nil {
+
+	i := func() (int) {
+		for i := 0; i < len(thumbprints); i+=2 {
+			if verifyKey, ok := keys[thumbprints[i]]; ok {
+				for _, op := range verifyKey.KeyOps() {
+					if op == jwk.KeyOpVerify {
+						return i
+					}
+				}
+			}
+		}
+		return -1
+	} ()
+	if i == -1 {
 		return nil, NoValidationKeysFound
 	}
 
-	_, err = jws.Verify(advJSON, jwa.ES512, verifyKey)
+	_, err = jws.Verify(advJSON, jwa.ES512, keys[thumbprints[i]])
 	if err != nil {
 		return nil, fmt.Errorf("signature invalid: %w", err)
 	}
 
-	sorted, err := getSortedThumbprints(keySet, jwk.KeyOpDeriveKey)
-	if err != nil {
-		return nil, err
-	}
-	if len(sorted) == 0 {
-		return nil, fmt.Errorf("no derive keys found in advertisement")
-	}
-
-	exchangeKey, err := getKey(keySet, jwk.KeyOpDeriveKey, []string{ sorted[0] })
-	if err != nil {
-		return nil, err
+	exchangeKey, ok := keys[thumbprints[i + 1]]
+	if ! ok {
+		return nil, fmt.Errorf("cannot find exchange key: %s", thumbprints[i + 1])
 	}
 
 	err = func() (err error) {
@@ -261,7 +255,7 @@ func getExchangeKey(url string, advJSON []byte, thumbprints []string) (k *Exchan
 	}
 
 	return &Exchange {
-		KeyID:       sorted[0],
+		KeyID:       thumbprints[i + 1],
 		headers:     headers,
 		exchangeKey: exchangeKey,
 	}, nil

@@ -110,10 +110,9 @@ func wipeDir(t *testing.T, now int64, test string) {
 	}
 }
 
-func retireKey(t *testing.T, key string, now int64, test string) {
+func removeKey(t *testing.T, key string, now int64, test string) {
 	from := path.Join(os.Getenv("TANG_DATA"), fmt.Sprintf("%d-%s-%s.jwk", now, test, keys[key].thumbprint))
-	to := path.Join(os.Getenv("TANG_DATA"), fmt.Sprintf(".%d-%s-%s.jwk", now, test, keys[key].thumbprint))
-	assert.NoError(t, os.Rename(from, to))
+	assert.NoError(t, os.Remove(from))
 }
 
 func TestStaticThumbprint(t *testing.T) {
@@ -122,7 +121,11 @@ func TestStaticThumbprint(t *testing.T) {
 	writeKey(t, "verify1", now, "thumbprint")
 	writeKey(t, "derive1", now, "thumbprint")
 	wipeDir(t, now, "thumbprint")
-	thumbprinter := NewStaticThumbprinter("2P5B1BrEu6ltBlfu8EWHUVxAJX6FRLCmTQUPsAHySa8")
+	thumbprinter, err := NewStaticThumbprinter(strings.Join([]string{
+		"2P5B1BrEu6ltBlfu8EWHUVxAJX6FRLCmTQUPsAHySa8/gWOHi5Tdcu10RKlTNOo7S8VvdN4a580N07dmU7HDqsM",
+		"fkCRLeUN3YozTn5g3aKxNy1EwyBOF8fFA-fmsoPJxUo/UCPvN8PxVGWck72Tra2qgGzDC6l3VeR6y-coQFGbm9c",
+	}, ","))
+	assert.NoError(t, err)
 	advertiser := NewTangAdvertiser(os.Getenv("TANG_URL"))
 	crypter := NewCrypter(thumbprinter, advertiser)
 	exchange, err := crypter.GetExchangeKey()
@@ -132,4 +135,18 @@ func TestStaticThumbprint(t *testing.T) {
 	cipher, err := crypter.Encrypt(exchange, []byte("hello"))
 	plain, err := Decrypt(cipher)
 	fmt.Println(string(plain))
+	writeKey(t, "verify2", now, "thumbprint")
+	writeKey(t, "derive2", now, "thumbprint")
+	exchange, err = crypter.GetExchangeKey()
+	if assert.NoError(t, err) {
+		assert.Equal(t, "gWOHi5Tdcu10RKlTNOo7S8VvdN4a580N07dmU7HDqsM", exchange.KeyID)
+	}
+	removeKey(t, "verify1", now, "thumbprint")
+	exchange, err = crypter.GetExchangeKey()
+	if assert.NoError(t, err) {
+		assert.Equal(t, "UCPvN8PxVGWck72Tra2qgGzDC6l3VeR6y-coQFGbm9c", exchange.KeyID)
+	}
+	removeKey(t, "verify2", now, "thumbprint")
+	exchange, err = crypter.GetExchangeKey()
+	assert.Error(t, err)
 }

@@ -54,7 +54,10 @@ func main() {
 	var healthz plugin.HealthChecker
 	switch spec.Version {
 	case "v1":
-		thumbprinter := crypter.NewStaticThumbprinter(spec.Thumbprints)
+		thumbprinter, err := crypter.NewStaticThumbprinter(spec.Thumbprints)
+		if err != nil {
+			abend("configuration error", err)
+		}
 		advertiser := crypter.NewTangAdvertiser(spec.TangURL)
 		crypter := crypter.NewCrypter(thumbprinter, advertiser)
 		healthz = v1.NewHealthChecker(logger)
@@ -63,7 +66,10 @@ func main() {
 			abend("unable to initialize encryption", err)
 		}
 	case "v2":
-		thumbprinter := crypter.NewStaticThumbprinter(spec.Thumbprints)
+		thumbprinter, err := crypter.NewStaticThumbprinter(spec.Thumbprints)
+		if err != nil {
+			abend("configuration error", err)
+		}
 		advertiser := crypter.NewTangAdvertiser(spec.TangURL)
 		crypter := crypter.NewCrypter(thumbprinter, advertiser)
 		healthz = v2.NewHealthChecker(logger)
