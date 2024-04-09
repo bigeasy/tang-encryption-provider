@@ -26,17 +26,16 @@ type Crypter interface {
 type v1plugin struct {
 	exchange *crypter.Exchange
 	crypter *crypter.Crypter
-	logger  *slog.Logger
 	net.Listener
 	*grpc.Server
 }
 
-func New(logger *slog.Logger, crypter *crypter.Crypter) (*v1plugin, error) {
+func New(crypter *crypter.Crypter) (*v1plugin, error) {
 	exchange, err := crypter.GetExchangeKey()
 	if err != nil {
 		return nil, fmt.Errorf("unable to get exchange key: %w", err)
 	}
-	return &v1plugin{logger: logger, crypter: crypter, exchange: exchange}, nil
+	return &v1plugin{crypter: crypter, exchange: exchange}, nil
 }
 
 func (g *v1plugin) Version(ctx context.Context, request *pb.VersionRequest) (*pb.VersionResponse, error) {
@@ -48,12 +47,12 @@ func (g *v1plugin) Encrypt(ctx context.Context, request *pb.EncryptRequest) (res
 	if err != nil {
 		return nil, fmt.Errorf("unable to encrypt: %w", err)
 	}
-	g.logger.Info("encrypted", slog.String("jwe", string(cipher)))
+	slog.Info("encrypted", slog.String("jwe", string(cipher)))
 	return &pb.EncryptResponse{Cipher: cipher}, nil
 }
 
 func (g *v1plugin) Decrypt(ctx context.Context, request *pb.DecryptRequest) (response *pb.DecryptResponse, err error) {
-	g.logger.Info("decrypting", slog.String("jwe", string(request.Cipher)))
+	slog.Info("decrypting", slog.String("jwe", string(request.Cipher)))
 	plain, err := crypter.Decrypt(request.Cipher)
 	if err != nil {
 		return nil, fmt.Errorf("unable to decrypt: %w", err)

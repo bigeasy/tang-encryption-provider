@@ -28,11 +28,10 @@ import (
 var _ plugin.HealthChecker = (*HealthChecker)(nil)
 
 type HealthChecker struct {
-	logger *slog.Logger
 }
 
-func NewHealthChecker(logger *slog.Logger) *HealthChecker {
-	return &HealthChecker{logger: logger}
+func NewHealthChecker() *HealthChecker {
+	return &HealthChecker{}
 }
 
 func (h *HealthChecker) PingRPC(ctx context.Context, conn *grpc.ClientConn) error {
@@ -44,7 +43,7 @@ func (h *HealthChecker) PingRPC(ctx context.Context, conn *grpc.ClientConn) erro
 		return fmt.Errorf("failed to retrieve version from gRPC endpoint: %w", err)
 	}
 
-	h.logger.Info("Successfully pinged gRPC")
+	slog.Info("Successfully pinged gRPC")
 	return nil
 }
 

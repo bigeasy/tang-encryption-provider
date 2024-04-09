@@ -24,12 +24,11 @@ import (
 
 // Metrics encapsulates functionality related to serving Prometheus metrics for kms-plugin.
 type Metrics struct {
-	logger 	   *slog.Logger
 	servingURL *url.URL
 }
 
-func NewMetricsManager(logger *slog.Logger, servingURL *url.URL) *Metrics {
-	return &Metrics{logger: logger, servingURL: servingURL}
+func NewMetricsManager(servingURL *url.URL) *Metrics {
+	return &Metrics{servingURL: servingURL}
 }
 
 // Serve creates http server for hosting Prometheus metrics.
@@ -40,7 +39,7 @@ func (m *Metrics) Serve() chan error {
 
 	go func() {
 		defer close(errorChan)
-		m.logger.Info("registering metrics listener", slog.String("serving_url", m.servingURL.String()))
+		slog.Info("registering metrics listener", slog.String("serving_url", m.servingURL.String()))
 		errorChan <- http.ListenAndServe(m.servingURL.Host, mux)
 	}()
 

@@ -29,11 +29,10 @@ import (
 var _ plugin.HealthChecker = (*HealthChecker)(nil)
 
 type HealthChecker struct {
-	logger *slog.Logger
 }
 
-func NewHealthChecker(logger *slog.Logger) *HealthChecker {
-	return &HealthChecker{logger: logger}
+func NewHealthChecker() *HealthChecker {
+	return &HealthChecker{}
 }
 
 func (h *HealthChecker) PingRPC(ctx context.Context, conn *grpc.ClientConn) error {
@@ -45,7 +44,7 @@ func (h *HealthChecker) PingRPC(ctx context.Context, conn *grpc.ClientConn) erro
 
 	// Check response is actually "ok"
 
-	h.logger.Debug("Successfully pinged gRPC")
+	slog.Debug("Successfully pinged gRPC")
 	return nil
 }
 
@@ -67,6 +66,6 @@ func (h *HealthChecker) PingKMS(ctx context.Context, conn *grpc.ClientConn) erro
 		return fmt.Errorf("failed to ping KMS: %w", err)
 	}
 
-	h.logger.Debug("Successfully pinged KMS")
+	slog.Debug("Successfully pinged KMS")
 	return nil
 }

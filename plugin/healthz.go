@@ -35,7 +35,6 @@ import (
 // 1. Getting version of the plugin - validates gRPC connectivity.
 // 2. Asserting that the caller has encrypt and decrypt permissions on the crypto key.
 type HealthCheckerManager struct {
-	logger		   *slog.Logger
 	unixSocketPath string
 	callTimeout    time.Duration
 	servingURL     *url.URL
@@ -48,11 +47,10 @@ type HealthChecker interface {
 	PingKMS(context.Context, *grpc.ClientConn) error
 }
 
-func NewHealthChecker(logger *slog.Logger, checker HealthChecker,
-	unixSocketPath string, callTimeout time.Duration, servingURL *url.URL) *HealthCheckerManager {
+func NewHealthChecker(checker HealthChecker, unixSocketPath string,
+	callTimeout time.Duration, servingURL *url.URL) *HealthCheckerManager {
 
 	return &HealthCheckerManager{
-		logger:         logger,
 		unixSocketPath: unixSocketPath,
 		callTimeout:    callTimeout,
 		servingURL:     servingURL,
@@ -68,7 +66,7 @@ func (m *HealthCheckerManager) Serve() chan error {
 
 	go func() {
 		defer close(errorCh)
-		m.logger.Info("registering healthz listener", slog.String("serving_url", m.servingURL.String()))
+		slog.Info("registering healthz listener", slog.String("serving_url", m.servingURL.String()))
 		select {
 		case errorCh <- http.ListenAndServe(m.servingURL.Host, mux):
 		default:
@@ -104,7 +102,10 @@ func (m *HealthCheckerManager) HandlerFunc(w http.ResponseWriter, r *http.Reques
 		return nil
 	} ()
 	if err != nil {
+		slog.Warn("healhz failed", err, err.Error())
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	} else {
+		slog.Debug("healhz called")
 	}
 }
 

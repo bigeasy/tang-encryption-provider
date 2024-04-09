@@ -13,12 +13,11 @@ import (
 )
 
 type v2plugin struct {
-	logger *slog.Logger
 	crypter *crypter.Crypter
 }
 
-func New(logger *slog.Logger, crypter *crypter.Crypter) (*v2plugin) {
-	return &v2plugin{logger: logger, crypter: crypter}
+func New(crypter *crypter.Crypter) (*v2plugin) {
+	return &v2plugin{crypter: crypter}
 }
 
 func (g *v2plugin) Status(ctx context.Context, request *pb.StatusRequest) (*pb.StatusResponse, error) {
@@ -33,31 +32,51 @@ func (g *v2plugin) Status(ctx context.Context, request *pb.StatusRequest) (*pb.S
 	} else {
 		response.KeyId = exchange.KeyID
 	}
+	slog.Debug("status",
+		slog.String("version", response.Version),
+		slog.String("healthz", response.Healthz),
+		slog.String("key_id", response.KeyId),
+	)
 	return response, nil
 }
 
 func (g *v2plugin) Encrypt(ctx context.Context, request *pb.EncryptRequest) (*pb.EncryptResponse, error) {
-	exchange, err := g.crypter.GetExchangeKey()
+	response, err := func() (*pb.EncryptResponse, error) {
+		exchange, err := g.crypter.GetExchangeKey()
+		if err != nil {
+			return nil, fmt.Errorf("unable to obtain exchange key: %w", err)
+		}
+		cipher, err := g.crypter.Encrypt(exchange, request.Plaintext)
+		if err != nil {
+			return nil, fmt.Errorf("unable to encrypt: %w", err)
+		}
+		return &pb.EncryptResponse{KeyId: exchange.KeyID, Ciphertext: cipher}, nil
+	} ()
 	if err != nil {
-		return nil, fmt.Errorf("unable to obtain exchange key: %w", err)
+		slog.Warn("encrypt", slog.String("uuid", request.Uid), slog.String("err", err.Error()))
+	} else {
+		slog.Debug("encrypt", slog.String("uuid", request.Uid))
 	}
-	cipher, err := g.crypter.Encrypt(exchange, request.Plaintext)
-	if err != nil {
-		return nil, fmt.Errorf("unable to encrypt: %w", err)
-	}
-	return &pb.EncryptResponse{KeyId: exchange.KeyID, Ciphertext: cipher}, nil
+	return response, err
 }
 
-func (g *v2plugin) Decrypt(ctx context.Context, request *pb.DecryptRequest) (response *pb.DecryptResponse, err error) {
-	g.logger.Info("decrypting", slog.String("jwe", string(request.Ciphertext)))
-	plain, err := crypter.Decrypt(request.Ciphertext)
+func (g *v2plugin) Decrypt(ctx context.Context, request *pb.DecryptRequest) (*pb.DecryptResponse, error) {
+	response, err := func() (*pb.DecryptResponse, error) {
+		plain, err := crypter.Decrypt(request.Ciphertext)
+		if err != nil {
+			return nil, fmt.Errorf("unable to decrypt: %w", err)
+		}
+		return &pb.DecryptResponse{Plaintext: plain}, nil
+	} ()
 	if err != nil {
-		return nil, fmt.Errorf("unable to decrypt: %w", err)
+		slog.Warn("decrypt", slog.String("uuid", request.Uid), slog.String("err", err.Error()))
+	} else {
+		slog.Debug("decrypt", slog.String("uuid", request.Uid))
 	}
-	return &pb.DecryptResponse{Plaintext: plain}, nil
+	return response, err
 }
 
 func (g *v2plugin) Register(s *grpc.Server) {
-	g.logger.Info("reigstering")
+	slog.Info("reigstering v2 plugin")
 	pb.RegisterKeyManagementServiceServer(s, g)
 }

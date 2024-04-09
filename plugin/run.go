@@ -23,7 +23,7 @@ import (
 	"log/slog"
 )
 
-func Run(logger *slog.Logger, p *PluginManager, h *HealthCheckerManager, m *Metrics) error {
+func Run(p *PluginManager, h *HealthCheckerManager, m *Metrics) error {
 	signalsChan := make(chan os.Signal, 1)
 	signal.Notify(signalsChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -36,15 +36,15 @@ func Run(logger *slog.Logger, p *PluginManager, h *HealthCheckerManager, m *Metr
 	for {
 		select {
 		case sig := <-signalsChan:
-			logger.Info("captured shutdown signal", slog.Any("signal", sig))
+			slog.Info("captured shutdown signal", slog.Any("signal", sig))
 			return nil
 		case kmsError := <-kmsErrorCh:
 			return kmsError
 		case metricsErr := <-metricsErrCh:
-			logger.Warn("metrics error", slog.Any("err", metricsErr))
+			slog.Warn("metrics error", slog.Any("err", metricsErr))
 			metricsErrCh = nil
 		case healthzErr := <-healthzErrCh:
-			logger.Warn("healthz error", slog.Any("err", healthzErr))
+			slog.Warn("healthz error", slog.Any("err", healthzErr))
 			healthzErrCh = nil
 		}
 	}
