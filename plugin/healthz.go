@@ -79,31 +79,33 @@ func (m *HealthCheckerManager) Serve() chan error {
 }
 
 func (m *HealthCheckerManager) HandlerFunc(w http.ResponseWriter, r *http.Request) {
-	m.logger.Info("called")
-	ctx, cancel := context.WithTimeout(r.Context(), m.callTimeout)
-	defer cancel()
+	err := func() error {
+		ctx, cancel := context.WithTimeout(r.Context(), m.callTimeout)
+		defer cancel()
 
-	conn, err := dialUnix(m.unixSocketPath)
+		conn, err := dialUnix(m.unixSocketPath)
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+
+		if err := m.checker.PingRPC(ctx, conn); err != nil {
+			return err
+		}
+
+		if r.FormValue("ping-kms") == "true" {
+			if err := m.checker.PingKMS(ctx, conn); err != nil {
+				return err
+			}
+		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+		return nil
+	} ()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
 	}
-	defer conn.Close()
-
-	if err := m.checker.PingRPC(ctx, conn); err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-
-	if r.FormValue("ping-kms") == "true" {
-		if err := m.checker.PingKMS(ctx, conn); err != nil {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
-			return
-		}
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok"))
 }
 
 func dialUnix(unixSocketPath string) (*grpc.ClientConn, error) {
