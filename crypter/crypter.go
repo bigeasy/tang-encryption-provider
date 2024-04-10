@@ -126,6 +126,9 @@ func (r TangAdvertiser) Resolve() ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		if (len(body) == 0) {
+			return nil, errors.New("advertisement gives a zero length response")
+		}
 		return body, nil
 	} ()
 	if err != nil {

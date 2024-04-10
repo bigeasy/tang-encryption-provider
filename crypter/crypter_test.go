@@ -149,4 +149,8 @@ func TestStaticThumbprint(t *testing.T) {
 	removeKey(t, "verify2", now, "thumbprint")
 	exchange, err = crypter.GetExchangeKey()
 	assert.Error(t, err)
+	removeKey(t, "derive2", now, "thumbprint")
+	writeKey(t, "verify1", now, "thumbprint")
+	writeKey(t, "derive1", now, "thumbprint")
+	wipeDir(t, now, "thumbprint")
 }

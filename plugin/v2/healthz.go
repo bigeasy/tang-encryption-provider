@@ -38,11 +38,14 @@ func NewHealthChecker() *HealthChecker {
 func (h *HealthChecker) PingRPC(ctx context.Context, conn *grpc.ClientConn) error {
 	client := pb.NewKeyManagementServiceClient(conn)
 
-	if _, err := client.Status(ctx, &pb.StatusRequest{}); err != nil {
-		return fmt.Errorf("failed to retrieve version from gRPC endpoint: %w", err)
+	response, err := client.Status(ctx, &pb.StatusRequest{})
+	if err != nil {
+		return fmt.Errorf("gRPC Status error: %w", err)
 	}
 
-	// Check response is actually "ok"
+	if response.Healthz != "ok" {
+		return fmt.Errorf("gRPC Status is not okay: %s", response.Healthz)
+	}
 
 	slog.Debug("Successfully pinged gRPC")
 	return nil
@@ -51,20 +54,32 @@ func (h *HealthChecker) PingRPC(ctx context.Context, conn *grpc.ClientConn) erro
 func (h *HealthChecker) PingKMS(ctx context.Context, conn *grpc.ClientConn) error {
 	client := pb.NewKeyManagementServiceClient(conn)
 
-	encryptResponse, err := client.Encrypt(ctx, &pb.EncryptRequest{
-		Uid:       uuid.NewString(),
-		Plaintext: []byte("secret"),
-	})
+	err := func() error {
+		encryptResponse, err := client.Encrypt(ctx, &pb.EncryptRequest{
+			Uid:       uuid.NewString(),
+			Plaintext: []byte("secret"),
+		})
+		if err != nil {
+			return err
+		}
+		decryptResponse, err := client.Decrypt(ctx, &pb.DecryptRequest{
+			Uid: uuid.NewString(),
+			KeyId: encryptResponse.KeyId,
+			Ciphertext: []byte(encryptResponse.Ciphertext),
+			Annotations: encryptResponse.Annotations,
+		})
+		if err != nil {
+			return err
+		}
+		if string(decryptResponse.Plaintext) != "secret" {
+			return fmt.Errorf("failed to encrypt and decrypt plain text")
+		}
+		return nil
+	} ()
 	if err != nil {
-		return fmt.Errorf("failed to ping KMS: %w", err)
+		fmt.Errorf("failed to ping KMS: %w", err)
 	}
 
-	if _, err = client.Decrypt(ctx, &pb.DecryptRequest{
-		Uid:        uuid.NewString(),
-		Ciphertext: []byte(encryptResponse.Ciphertext),
-	}); err != nil {
-		return fmt.Errorf("failed to ping KMS: %w", err)
-	}
 
 	slog.Debug("Successfully pinged KMS")
 	return nil

@@ -31,25 +31,29 @@ type Specification struct {
 }
 
 func main() {
+	abend := func (message string, err error) {
+		slog.Error(message, slog.Any("err", err))
+		os.Exit(1)
+	}
 	var spec Specification
+	err := envconfig.Process("tang_kms", &spec)
+	if err != nil {
+		abend("unable to read environment", err)
+	}
 	var level slog.Leveler
+	slog.Info("level", "foo", strings.ToLower(spec.LogLevel))
+	slog.Info("level", "bar", spec.LogLevel)
+	fmt.Println(spec.LogLevel)
 	switch strings.ToLower(spec.LogLevel) {
 	case "info":
 		level = slog.LevelInfo
 	case "debug":
+		slog.Info("debug")
 		level = slog.LevelDebug
 	default:
 		level = slog.LevelInfo
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{ Level: level })))
-	abend := func (message string, err error) {
-		slog.Error(message, slog.Any("err", err))
-		os.Exit(1)
-	}
-	err := envconfig.Process("tang_kms", &spec)
-	if err != nil {
-		abend("unable to read environment", err)
-	}
 	slog.Info("configuration",
 		slog.String("log_level", spec.LogLevel),
 		slog.String("version", spec.Version),

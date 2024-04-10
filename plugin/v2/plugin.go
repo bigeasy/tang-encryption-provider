@@ -50,28 +50,44 @@ func (g *v2plugin) Encrypt(ctx context.Context, request *pb.EncryptRequest) (*pb
 		if err != nil {
 			return nil, fmt.Errorf("unable to encrypt: %w", err)
 		}
-		return &pb.EncryptResponse{KeyId: exchange.KeyID, Ciphertext: cipher}, nil
+		annotations := make(map[string][]byte)
+		annotations["flatheadmill.github.io"] = cipher
+		return &pb.EncryptResponse{KeyId: exchange.KeyID, Ciphertext: []byte{ 0 }, Annotations: annotations}, nil
 	} ()
 	if err != nil {
 		slog.Warn("encrypt", slog.String("uuid", request.Uid), slog.String("err", err.Error()))
 	} else {
-		slog.Debug("encrypt", slog.String("uuid", request.Uid))
+		slog.Debug("encrypt", slog.String("uuid", request.Uid), slog.String("key_id", response.KeyId))
 	}
 	return response, err
 }
 
 func (g *v2plugin) Decrypt(ctx context.Context, request *pb.DecryptRequest) (*pb.DecryptResponse, error) {
 	response, err := func() (*pb.DecryptResponse, error) {
-		plain, err := crypter.Decrypt(request.Ciphertext)
+		if len(request.Ciphertext) != 1 && request.Ciphertext[0] != 0 {
+			return nil, fmt.Errorf("unexpected ciphertext placeholder")
+		}
+		cipher, ok := request.Annotations["flatheadmill.github.io"]
+		if ! ok {
+			return nil, fmt.Errorf("ciphertext annotation missing")
+		}
+		plain, err := crypter.Decrypt(cipher)
 		if err != nil {
 			return nil, fmt.Errorf("unable to decrypt: %w", err)
 		}
 		return &pb.DecryptResponse{Plaintext: plain}, nil
 	} ()
 	if err != nil {
-		slog.Warn("decrypt", slog.String("uuid", request.Uid), slog.String("err", err.Error()))
+		slog.Warn("decrypt",
+			slog.String("uuid", request.Uid),
+			slog.String("key_id", request.KeyId),
+			slog.String("err", err.Error()),
+		)
 	} else {
-		slog.Debug("decrypt", slog.String("uuid", request.Uid))
+		slog.Debug("decrypt",
+			slog.String("uuid", request.Uid),
+			slog.String("key_id", request.KeyId),
+		)
 	}
 	return response, err
 }
